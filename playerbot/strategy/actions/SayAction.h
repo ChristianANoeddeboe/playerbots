@@ -18,6 +18,7 @@ namespace ai
 
     typedef std::pair<WorldPacket, uint32> delayedPacket;
     typedef std::vector<delayedPacket> delayedPackets;
+    typedef std::future<delayedPackets> futurePackets;
 
     class ChatReplyAction : public Action
     {
@@ -26,7 +27,8 @@ namespace ai
         virtual bool Execute(Event& event) { return true; }
         bool isUseful();
 
-        static void GetAIChatPlaceholders(std::map<std::string, std::string>& placeholders, Unit* unit = nullptr, const std::string preFix = "bot");
+        static void GetAIChatPlaceholders(std::map<std::string, std::string>& placeholders, Unit* sender = nullptr, Unit* receiver = nullptr);
+        static void GetAIChatPlaceholders(std::map<std::string, std::string>& placeholders, Unit* unit, const std::string preFix = "bot", Player* observer = nullptr);
         static WorldPacket GetPacketTemplate(Opcodes op, uint32 type, Unit* sender, Unit* target = nullptr);
         static delayedPackets LinesToPackets(const std::vector<std::string>& lines, WorldPacket packetTemplate, bool debug = false, uint32 MsPerChar = 0, WorldPacket emoteTemplate = WorldPacket());
 
