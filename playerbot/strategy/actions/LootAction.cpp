@@ -64,16 +64,24 @@ bool OpenLootAction::Execute(Event &event)
 bool OpenLootAction::DoLoot(LootObject &lootObject)
 {
     if (lootObject.IsEmpty())
+    {
         return false;
+    }
 
     Creature *creature = ai->GetCreature(lootObject.guid);
     if (creature && sServerFacade.GetDistance2d(bot, creature) > INTERACTION_DISTANCE)
+    {
+        sLog.outDebug("Bot %s is too far to loot creature %s", bot->GetName(), creature->GetName());
         return false;
+    }
 
     if (creature && creature->HasFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE) && !creature->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SKINNABLE))
     {
         if (!lootObject.IsLootPossible(bot)) // Clear loot if bot can't loot it.
+        {
+            sLog.outDebug("Bot %s can't loot creature %s", bot->GetName(), creature->GetName());
             return true;
+        }
 
         WorldPacket packet(CMSG_LOOT, 8);
         packet << lootObject.guid;
@@ -82,6 +90,7 @@ bool OpenLootAction::DoLoot(LootObject &lootObject)
 
         if (bot->isRealPlayer())
         {
+            sLog.outDebug("Bot %s loots creature %s", bot->GetName(), creature->GetName());
             WorldPacket data(SMSG_EMOTE, 4 + 8);
             data << uint32(EMOTE_ONESHOT_LOOT);
             data << bot->GetObjectGuid();
