@@ -128,7 +128,7 @@ bool RpgEmoteAction::Execute(Event& event)
 
     if (type != TEXTEMOTE_CHICKEN)
         rpg->AfterExecute();
-    else if(unit && !bot->GetNPCIfCanInteractWith(rpg->guidP(), UNIT_NPC_FLAG_QUESTGIVER) && AI_VALUE(TravelTarget*, "travel target")->getEntry() == 620)
+    else if(unit && !bot->GetNPCIfCanInteractWith(rpg->guidP(), UNIT_NPC_FLAG_QUESTGIVER) && AI_VALUE(TravelTarget*, "travel target")->GetEntry() == 620)
         rpg->AfterExecute(true,false, "rpg emote");
 
     DoDelay();
@@ -140,7 +140,7 @@ bool RpgCancelAction::Execute(Event& event)
 {
     rpg->OnCancel();  
 
-    if (!urand(0,3) || AI_VALUE(GuidPosition, "rpg target").GetEntry() != AI_VALUE(TravelTarget*, "travel target")->getEntry() || !AI_VALUE(TravelTarget*, "travel target")->isWorking()) //1 out of 4 to ignore current travel target after cancel.
+    if (!urand(0,3) || AI_VALUE(GuidPosition, "rpg target").GetEntry() != AI_VALUE(TravelTarget*, "travel target")->GetEntry() || !AI_VALUE(TravelTarget*, "travel target")->IsWorking()) //1 out of 4 to ignore current travel target after cancel.
         AI_VALUE(std::set<ObjectGuid>&, "ignore rpg target").insert(AI_VALUE(GuidPosition, "rpg target")); 
 
     RESET_AI_VALUE(GuidPosition, "rpg target"); rpg->AfterExecute(false, false, ""); DoDelay(); 
@@ -352,10 +352,13 @@ bool RpgAIChatAction::SpeakLine()
         }
     }
 
-    std::string llmContext = AI_VALUE(std::string, "manual string::llmcontext rpg");
-    llmContext = llmContext + " " + message;
-    PlayerbotLLMInterface::LimitContext(llmContext, llmContext.size());
-    SET_AI_VALUE(std::string, "manual string::llmcontext rpg", llmContext);
+    if (message.find("d:") == std::string::npos)
+    {
+        std::string llmContext = AI_VALUE(std::string, "manual string::llmcontext rpg");
+        llmContext = llmContext + " " + message;
+        PlayerbotLLMInterface::LimitContext(llmContext, llmContext.size());
+        SET_AI_VALUE(std::string, "manual string::llmcontext rpg", llmContext);
+    }
 
     packets.pop();
 
@@ -460,7 +463,7 @@ bool RpgAIChatAction::RequestNewLines()
 
     for (auto& prompt : jsonFill)
     {
-        BOT_TEXT2(prompt.second, placeholders);
+        prompt.second = BOT_TEXT2(prompt.second, placeholders);
     }
 
     uint32 currentLength = jsonFill["<pre prompt>"].size() + jsonFill["<context>"].size() + jsonFill["<prompt>"].size() + llmContext.size();

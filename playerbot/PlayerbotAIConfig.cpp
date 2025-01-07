@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <boost/algorithm/string.hpp>
 #include <regex>
+#include "PlayerbotLoginMgr.h"
 
 std::vector<std::string> ConfigAccess::GetValues(const std::string& name) const
 {
@@ -262,6 +263,40 @@ bool PlayerbotAIConfig::Initialize()
     bExplicitDbStoreSave = config.GetBoolDefault("AiPlayerbot.ExplicitDbStoreSave", false);
 
     randomBotLoginWithPlayer = config.GetBoolDefault("AiPlayerbot.RandomBotLoginWithPlayer", false);
+    asyncBotLogin = config.GetBoolDefault("AiPlayerbot.AsyncBotLogin", false);
+    preloadHolders = config.GetBoolDefault("AiPlayerbot.PreloadHolders", false);
+    
+    freeRoomForNonSpareBots = config.GetIntDefault("AiPlayerbot.FreeRoomForNonSpareBots", 1);
+
+    loginBotsNearPlayerRange = config.GetIntDefault("AiPlayerbot.LoginBotsNearPlayerRange", 1000);
+    
+    LoadListString<std::vector<std::string> >(config.GetStringDefault("AiPlayerbot.DefaultLoginCriteria", "maxbots,spareroom,offline"), defaultLoginCriteria);
+
+    std::vector<std::string> criteriaValues = configA->GetValues("AiPlayerbot.LoginCriteria");
+    std::sort(criteriaValues.begin(), criteriaValues.end());
+    loginCriteria.clear();
+    for (auto& value : criteriaValues)
+    {
+        loginCriteria.push_back({});
+        LoadListString<std::vector<std::string> >(config.GetStringDefault(value, ""), loginCriteria.back());
+    }
+
+    if (criteriaValues.empty())
+    {
+        loginCriteria.push_back({ "group" });
+        loginCriteria.push_back({ "arena" });
+        loginCriteria.push_back({ "bg" });
+        loginCriteria.push_back({ "guild" });
+        loginCriteria.push_back({ "logoff,classrace,level,online" });
+        loginCriteria.push_back({ "logoff,classrace,level" });
+        loginCriteria.push_back({ "logoff,classrace" });
+    }
+    
+
+    for (uint32 level = 1; level <= DEFAULT_MAX_LEVEL; ++level)
+    {
+        levelProbability[level] = config.GetIntDefault("AiPlayerbot.LevelProbability." + std::to_string(level), 100);
+    }
 
     sLog.outString("Loading Race/Class probabilities");
 
@@ -427,10 +462,10 @@ bool PlayerbotAIConfig::Initialize()
         for (auto value : values)
         {
             std::vector<std::string> ids = split(value, '.');
-            std::vector<uint32> params = { 0,0,0,0,0 };
+            std::vector<uint32> params = { 0,0,0,0,0,0 };
 
             //Extract faction, class, spec, minlevel, maxlevel
-            for (uint8 i = 0; i < 5; i++)
+            for (uint8 i = 0; i < 6; i++)
                 if (ids.size() > i + 2)
                     params[i] = stoi(ids[i + 2]);
 
@@ -441,7 +476,7 @@ bool PlayerbotAIConfig::Initialize()
             //Store buffs for later application.
             for (auto buff : buffs)
             {
-                worldBuff wb = { buff, params[0], params[1], params[2], params[3], params[4] };
+                worldBuff wb = { buff, params[0], params[1], params[2], params[3], params[4], params[5] };
                 worldBuffs.push_back(wb);
             }
 
@@ -591,6 +626,7 @@ bool PlayerbotAIConfig::Initialize()
     respawnModForInstances = config.GetBoolDefault("AiPlayerbot.RespawnModForInstances", false);
 
     //LLM START
+    llmEnabled = config.GetIntDefault("AiPlayerbot.LLMEnabled", 1);
     llmApiEndpoint = config.GetStringDefault("AiPlayerbot.LLMApiEndpoint", "http://127.0.0.1:5001/api/v1/generate");
     try {
         llmEndPointUrl = parseUrl(llmApiEndpoint);
@@ -606,17 +642,21 @@ bool PlayerbotAIConfig::Initialize()
         
     
     llmPrePrompt = config.GetStringDefault("AiPlayerbot.LLMPrePrompt", "You are a roleplaying character in World of Warcraft: <expansion name>. Your name is <bot name>. The <other type> <other name> is speaking to you <channel name> and is an <other gender> <other race> <other class> of level <other level>. You are level <bot level> and play as a <bot gender> <bot race> <bot class> that is currently in <bot subzone> <bot zone>. Answer as a roleplaying character. Limit responses to 100 characters.");
+
     llmPreRpgPrompt = config.GetStringDefault("AiPlayerbot.LLMRpgPrompt", "In World of Warcraft: <expansion name> in <bot zone> <bot subzone> stands <bot type> <bot name> a level <bot level> <bot gender> <bot race> <bot class>."
         " Standing nearby is <unit type> <unit name> <unit subname> a level <unit level> <unit gender> <unit race> <unit faction> <unit class>. Answer as a roleplaying character. Limit responses to 100 characters.");
+
+
+
     llmPrompt = config.GetStringDefault("AiPlayerbot.LLMPrompt", "<receiver name>:<initial message>");
     llmPostPrompt = config.GetStringDefault("AiPlayerbot.LLMPostPrompt", "<sender name>:");
 
     llmResponseStartPattern = config.GetStringDefault("AiPlayerbot.LLMResponseStartPattern", R"(("text":\s*"))");
-    llmResponseEndPattern = config.GetStringDefault("AiPlayerbot.LLMResponseEndPattern", R"(("|<receiver name>:))");
-    llmResponseDeletePattern = config.GetStringDefault("AiPlayerbot.LLMResponseDeletePattern", R"((\\n|<sender name>:))");
+    llmResponseEndPattern = config.GetStringDefault("AiPlayerbot.LLMResponseEndPattern", R"(("|\b(?!<sender name>\b)(\w+):))");
+    llmResponseDeletePattern = config.GetStringDefault("AiPlayerbot.LLMResponseDeletePattern", R"((\\n|<sender name>:|\\[^ ]+))");
     llmResponseSplitPattern = config.GetStringDefault("AiPlayerbot.LLMResponseSplitPattern", R"((\*.*?\*)|(\[.*?\])|(\'.*\')|([^\*\[\] ][^\*\[\]]+?[.?!]))");
 
-    if (true) //Disable for release
+    if (false) //Disable for release
     {
         sLog.outError("# AiPlayerbot.LLMResponseStartPattern = %s", llmResponseStartPattern.c_str());
         sLog.outError("# AiPlayerbot.LLMResponseEndPattern = %s", llmResponseEndPattern.c_str());
@@ -653,7 +693,30 @@ bool PlayerbotAIConfig::Initialize()
     }
 
     llmGlobalContext = config.GetBoolDefault("AiPlayerbot.LLMGlobalContext", false);
-    llmBotToBotChatChance = config.GetIntDefault("AiPlayerbot.LLMBotToBotChatChance", false);
+    llmBotToBotChatChance = config.GetIntDefault("AiPlayerbot.LLMBotToBotChatChance", 0);
+    llmRpgAIChatChance = config.GetIntDefault("AiPlayerbot.LLMRpgAIChatChance", 100);
+
+    std::list<std::string> blockedChannels;
+    LoadListString<std::list<std::string>>(config.GetStringDefault("AiPlayerbot.LLMBlockedReplyChannels", ""), blockedChannels);
+    std::map<std::string, ChatChannelSource> sourceName;
+    sourceName["guild"] = ChatChannelSource::SRC_GUILD;
+    sourceName["world"] = ChatChannelSource::SRC_WORLD;
+    sourceName["general"] = ChatChannelSource::SRC_GENERAL;
+    sourceName["trade"] = ChatChannelSource::SRC_TRADE;
+    sourceName["lfg"] = ChatChannelSource::SRC_LOOKING_FOR_GROUP;
+    sourceName["ldefence"] = ChatChannelSource::SRC_LOCAL_DEFENSE;
+    sourceName["wdefence"] = ChatChannelSource::SRC_WORLD_DEFENSE;
+    sourceName["grecruitement"] = ChatChannelSource::SRC_GUILD_RECRUITMENT;
+    sourceName["say"] = ChatChannelSource::SRC_SAY;
+    sourceName["whisper"] = ChatChannelSource::SRC_WHISPER;
+    sourceName["emote"] = ChatChannelSource::SRC_EMOTE;
+    sourceName["temote"] = ChatChannelSource::SRC_TEXT_EMOTE;
+    sourceName["yell"] = ChatChannelSource::SRC_YELL;
+    sourceName["party"] = ChatChannelSource::SRC_PARTY;
+    sourceName["raid"] = ChatChannelSource::SRC_RAID;
+
+    for (auto& channelName : blockedChannels)
+        llmBlockedReplyChannels.insert(sourceName[channelName]);
 
     //LLM END
 
@@ -703,7 +766,7 @@ bool PlayerbotAIConfig::Initialize()
     targetPosRecalcDistance = config.GetFloatDefault("AiPlayerbot.TargetPosRecalcDistance", 0.1f),
 
     sLog.outString("Loading area levels.");
-    sTravelMgr.loadAreaLevels();
+    sTravelMgr.LoadAreaLevels();
     sLog.outString("Loading spellIds.");
     ChatHelper::PopulateSpellNameList();
     ItemUsageValue::PopulateProfessionReagentIds();

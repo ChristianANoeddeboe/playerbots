@@ -363,6 +363,20 @@ namespace ai
         }
     };
 
+    class IntManualSetSavedValue : public IntManualSetValue
+    {
+    public:
+        IntManualSetSavedValue(PlayerbotAI* ai, int32 defaultValue = -1, std::string name = "manual saved int") : IntManualSetValue(ai, defaultValue, name){};
+
+        virtual std::string Format()
+        {
+            return std::to_string(this->value);
+        }
+
+        virtual std::string Save() { return std::to_string(this->value); }
+        virtual bool Load(std::string text) { value = stoi(text); return true; }
+    };
+
     class StringManualSetValue : public ManualSetValue<std::string>, public Qualified
     {
     public:
@@ -372,5 +386,17 @@ namespace ai
         {
             return this->value;
         }
+    };
+
+    class StringManualSetSavedValue : public ManualSetValue<std::string>, public Qualified
+    {
+    public:
+        StringManualSetSavedValue(PlayerbotAI* ai, std::string defaultValue = "", std::string name = "manual saved string") : ManualSetValue<std::string>(ai, defaultValue, name), Qualified() {};
+        virtual std::string Format()
+        {
+            return this->value;
+        }
+        virtual std::string Save() { return value; }
+        virtual bool Load(std::string text) { value = text; return true; }
     };
 }

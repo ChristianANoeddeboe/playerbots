@@ -23,6 +23,7 @@
 #include "Chat/ChannelMgr.h"
 #include "Guilds/GuildMgr.h"
 #include "World/WorldState.h"
+#include "PlayerbotLoginMgr.h"
 
 #ifndef MANGOSBOT_ZERO
 #ifdef CMANGOS
@@ -224,6 +225,10 @@ double botPIDImpl::calculate(double setpoint, double pv)
 
     // Integral term
     _integral += error * _dt;
+
+    _integral = std::min(_integral, (double)100);
+    _integral = std::max(_integral, (double)-100);
+
     double Iout = _Ki * _integral;
 
     // Derivative term
@@ -285,7 +290,7 @@ RandomPlayerbotMgr::RandomPlayerbotMgr()
         //1) Proportional: Amount activity is adjusted based on diff being above or below wanted diff. (100 wanted diff & 0.1 p = 150 diff = -5% activity)
         //2) Integral: Same as proportional but builds up each tick. (100 wanted diff & 0.01 i = 150 diff = -0.5% activity each tick)
         //3) Derative: Based on speed of diff. (+5 diff last tick & 0.05 d = -0.25% activity)
-        pid.adjust(0.05,0.01,0.2);
+        pid.adjust(0.05,0.1,0.2);
         BgCheckTimer = 0;
         LfgCheckTimer = 0;
         PlayersCheckTimer = 0;
@@ -553,7 +558,16 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool minimal)
     if (!sPlayerbotAIConfig.randomBotAutologin || !sPlayerbotAIConfig.enabled)
         return;
 
+    if (!playersLevel)
+        playersLevel = sPlayerbotAIConfig.syncLevelNoPlayer;
+
     ScaleBotActivity();
+    if (sPlayerbotAIConfig.asyncBotLogin)
+    {
+        auto pmo = sPerformanceMonitor.start(PERF_MON_RNDBOT, "AsyncBotLogin");
+        sPlayerBotLoginMgr.Update(players);
+        pmo.reset();
+    }
 
     uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
     if (!maxAllowedBotCount || ((uint32)maxAllowedBotCount < sPlayerbotAIConfig.minRandomBots || (uint32)maxAllowedBotCount > sPlayerbotAIConfig.maxRandomBots))
@@ -633,7 +647,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool minimal)
         }
 
         //Log in bots
-        if (sRandomPlayerbotMgr.GetDatabaseDelay("CharacterDatabase") < 10 * IN_MILLISECONDS)
+        if (sRandomPlayerbotMgr.GetDatabaseDelay("CharacterDatabase") < 10 * IN_MILLISECONDS && !sPlayerbotAIConfig.asyncBotLogin)
         {
             for (auto bot : availableBots)
             {
@@ -821,8 +835,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
     uint32 maxLevel = sWorld.getConfig(CONFIG_UINT32_MAX_PLAYER_LEVEL);
     float currentAvgLevel = 0, wantedAvgLevel = 0, randomAvgLevel = 0;
 
-    if (!playersLevel)
-        playersLevel = sPlayerbotAIConfig.syncLevelNoPlayer;
+    if(sPlayerbotAIConfig.asyncBotLogin)
+        return 0;
   
     if (currentBots.size() < currentAllowedBotCount)
     {
@@ -1859,7 +1873,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
 
     bool isValid = true;
    
-    if (sPlayerbotAIConfig.randomBotTimedLogout && !GetEventValue(bot, "add")) // RandomBotInWorldTime is expired.
+    if (sPlayerbotAIConfig.randomBotTimedLogout && !GetEventValue(bot, "add") && !sPlayerbotAIConfig.asyncBotLogin) // RandomBotInWorldTime is expired.
         isValid = false;
     else if(!botsAllowedInWorld)                                               // Logout if all players logged out
         isValid = false;
@@ -1974,7 +1988,7 @@ bool RandomPlayerbotMgr::ProcessBot(Player* player)
     TravelTarget* target = player->GetPlayerbotAI()->GetAiObjectContext()->GetValue<TravelTarget*>("travel target")->Get();
     if (target)
     {
-        if (target->getTravelState() == TravelState::TRAVEL_STATE_IDLE)
+        if (target->GetTravelState() == TravelState::TRAVEL_STATE_IDLE)
             idleBot = true;
     }
     else
@@ -2095,7 +2109,7 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation> 
     tlocs.erase(std::remove_if(tlocs.begin(), tlocs.end(), [](const WorldPosition& l) {std::vector<uint32>::iterator i = find(sPlayerbotAIConfig.randomBotMaps.begin(), sPlayerbotAIConfig.randomBotMaps.end(), l.getMapId()); return i == sPlayerbotAIConfig.randomBotMaps.end(); }), tlocs.end());
 
     //Random shuffle based on distance. Closer distances are more likely (but not exclusively) to be at the begin of the list.
-    tlocs = sTravelMgr.getNextPoint(WorldPosition(bot), tlocs, 0);
+    tlocs = WorldPosition(bot).GetNextPoint(tlocs, 0);
 
     //5% + 0.1% per level chance node on different map in selection.
     //tlocs.erase(std::remove_if(tlocs.begin(), tlocs.end(), [bot](WorldLocation const& l) {return l.mapid != bot->GetMapId() && urand(1, 100) > 0.5 * bot->GetLevel(); }), tlocs.end());
@@ -2992,14 +3006,14 @@ std::string RandomPlayerbotMgr::GetData(uint32 bot, std::string type)
     return GetEventData(bot, type);
 }
 
-void RandomPlayerbotMgr::SetValue(uint32 bot, std::string type, uint32 value, std::string data)
+void RandomPlayerbotMgr::SetValue(uint32 bot, std::string type, uint32 value, std::string data, int32 validIn)
 {
-    SetEventValue(bot, type, value, 15*24*3600, data);
+    SetEventValue(bot, type, value, validIn == -1 ? 15*24*3600 : validIn, data);
 }
 
-void RandomPlayerbotMgr::SetValue(Player* bot, std::string type, uint32 value, std::string data)
+void RandomPlayerbotMgr::SetValue(Player* bot, std::string type, uint32 value, std::string data, int32 validIn)
 {
-    SetValue(bot->GetObjectGuid().GetCounter(), type, value, data);
+    SetValue(bot->GetObjectGuid().GetCounter(), type, value, data, validIn);
 }
 
 bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, char const* args)
@@ -3068,6 +3082,7 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
         std::stringstream ss;
         ss << "Avg diff: " << sWorld.GetAverageDiff() << "\n";
         ss << "Max diff: " << sWorld.GetMaxDiff() << "\n";
+        ss << "char db ping: " << sRandomPlayerbotMgr.GetDatabaseDelay("CharacterDatabase") << "\n";
         ss << "Sessions online: " << sWorld.GetActiveSessionCount();
 
         sLog.outString(ss.str().c_str());
@@ -3108,6 +3123,12 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
             t.detach();
         }
 
+        return true;
+    }
+
+    if (cmd.find("login debug") == 0)
+    {
+        sPlayerBotLoginMgr.ToggleDebug();
         return true;
     }
 
@@ -3452,34 +3473,8 @@ void RandomPlayerbotMgr::PrintStats(uint32 requesterGuid)
         TravelTarget* target = bot->GetPlayerbotAI()->GetAiObjectContext()->GetValue<TravelTarget*>("travel target")->Get();
         if (target)
         {
-            TravelState state = target->getTravelState();
-            stateCount[(uint8)state]++;
-
-            const Quest* quest = nullptr;
-            if (target->getDestination())
-            {
-                quest = target->getDestination()->GetQuestTemplate();
-            }
-
-            if (quest)
-            {
-                bool found = false;
-                for (auto& q : questCount)
-                {
-                    if (q.first != quest)
-                    {
-                        continue;
-                    }
-
-                    q.second++;
-                    found = true;
-                }
-
-                if (!found)
-                {
-                    questCount.push_back(std::make_pair(quest, 1));
-                }
-            }
+            TravelState state = target->GetTravelState();
+            stateCount[(uint8)state]++;            
         }
     });
 
@@ -3596,19 +3591,6 @@ void RandomPlayerbotMgr::PrintStats(uint32 requesterGuid)
     ss.str(""); ss << "    Idling: " << stateCount[(uint8)TravelState::TRAVEL_STATE_IDLE];
     sLog.outString(ss.str().c_str());
     if (requester) { requester->SendMessageToPlayer(ss.str()); }
-
-    /*sort(questCount.begin(), questCount.end(), [](std::pair<Quest const*, int32> i, std::pair<Quest const*, int32> j) {return i.second > j.second; });
-
-    sLog.outString("Bots top quests:");
-
-    int cnt = 0;
-    for (auto& quest : questCount)
-    {
-        sLog.outString("    [%d]: %s (%d)", quest.second, quest.first->GetTitle().c_str(), quest.first->GetQuestLevel());
-        cnt++;
-        if (cnt > 25)
-            break;
-    }*/
 }
 
 double RandomPlayerbotMgr::GetBuyMultiplier(Player* bot)
@@ -3722,9 +3704,9 @@ void RandomPlayerbotMgr::RandomTeleportForRpg(Player* bot, bool activeOnly)
         AiObjectContext* context = bot->GetPlayerbotAI()->GetAiObjectContext();
         TravelTarget* travelTarget = AI_VALUE(TravelTarget*, "travel target");
 
-        travelTarget->setTarget(sTravelMgr.nullTravelDestination, sTravelMgr.nullWorldPosition, true);
-        travelTarget->setStatus(TravelStatus::TRAVEL_STATUS_COOLDOWN);
-        travelTarget->setExpireIn(10 * MINUTE * IN_MILLISECONDS);
+        sTravelMgr.SetNullTravelTarget(travelTarget);
+        travelTarget->SetStatus(TravelStatus::TRAVEL_STATUS_COOLDOWN);
+        travelTarget->SetExpireIn(10 * MINUTE * IN_MILLISECONDS);
     }
 }
 

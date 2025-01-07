@@ -3,12 +3,10 @@
 #include "playerbot/strategy/Action.h"
 #include "MovementActions.h"
 #include "GenericActions.h"
+#include "playerbot/TravelMgr.h"
 
 namespace ai
 {
-    class TravelTarget;
-    class TravelDestination;
-
     class ChooseTravelTargetAction : public MovementAction {
     public:
         ChooseTravelTargetAction(PlayerbotAI* ai, std::string name = "choose travel target") : MovementAction(ai, name) {}
@@ -22,13 +20,13 @@ namespace ai
         void setNewTarget(Player* requester, TravelTarget* newTarget, TravelTarget* oldTarget);
         void ReportTravelTarget(Player* requester, TravelTarget* newTarget, TravelTarget* oldTarget);
 
-        std::vector<WorldPosition*> getLogicalPoints(Player* requester, std::vector<WorldPosition*>& travelPoints);
-        bool SetBestTarget(Player* requester, TravelTarget* target, std::vector<TravelDestination*>& activeDestinations);
+        std::vector<std::pair<TravelDestination*, WorldPosition*>> getLogicalPoints(Player* requester, const std::vector<std::pair<TravelDestination*, WorldPosition*>>& travelPoints);
+        bool SetBestTarget(Player* requester, TravelTarget* target, std::vector<TravelDestination*>& activeDestinations, bool onlyActive = true);
 
         bool SetGroupTarget(Player* requester, TravelTarget* target);
         bool SetCurrentTarget(Player* requester, TravelTarget* target, TravelTarget* oldTarget);
         bool SetQuestTarget(Player* requester, TravelTarget* target, bool newQuests = true, bool activeQuests = true, bool completedQuests = true);
-        bool SetRpgTarget(Player* requester, TravelTarget* target);
+        bool SetRpgTarget(Player* requester, TravelTarget* target, bool onlyActive = true);
         bool SetGrindTarget(Player* requester, TravelTarget* target);
         bool SetBossTarget(Player* requester, TravelTarget* target);
         bool SetExploreTarget(Player* requester, TravelTarget* target);
@@ -41,6 +39,8 @@ namespace ai
     private:
         virtual bool needForQuest(Unit* target);
         virtual bool needItemForQuest(uint32 itemId, const Quest* questTemplate, const QuestStatusData* questStatus);
+
+        PlayerTravelInfo info;
 
 #ifdef GenerateBotHelp
         virtual std::string GetHelpName() { return "choose travel target"; } //Must equal iternal name

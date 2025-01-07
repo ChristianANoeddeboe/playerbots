@@ -80,13 +80,13 @@ void PacketHandlingHelper::Handle(ExternalEventHelper &helper)
     if (!m_botPacketMutex.try_lock()) //Packets do not have to be handled now. Handle them later.
         return;
 
-    std::queue<WorldPacket> delayed;
+    std::stack<WorldPacket> delayed;
 
     while (!queue.empty())
     {
-        if (!helper.HandlePacket(handlers, queue.back()))
-            if(delay[queue.back().GetOpcode()])
-                delayed.push(queue.back());
+        if (!helper.HandlePacket(handlers, queue.top()))
+            if(delay[queue.top().GetOpcode()])
+                delayed.push(queue.top());
         queue.pop();
     }
 
@@ -198,7 +198,7 @@ PlayerbotAI::PlayerbotAI(Player* bot) :
     botOutgoingPacketHandlers.AddHandler(SMSG_QUESTUPDATE_ADD_ITEM, "quest update add item", true);
 #else
     botOutgoingPacketHandlers.AddHandler(SMSG_QUESTUPDATE_ADD_ITEM_OBSOLETE, "quest update add item", true);
-#endif;
+#endif
     botOutgoingPacketHandlers.AddHandler(SMSG_QUESTUPDATE_FAILED, "quest update failed", true);
     botOutgoingPacketHandlers.AddHandler(SMSG_QUESTUPDATE_FAILEDTIMER, "quest update failed timer", true);
     botOutgoingPacketHandlers.AddHandler(SMSG_QUESTUPDATE_COMPLETE, "quest update complete", true);
@@ -213,10 +213,7 @@ PlayerbotAI::PlayerbotAI(Player* bot) :
     botOutgoingPacketHandlers.AddHandler(SMSG_SUMMON_REQUEST, "summon request");
     botOutgoingPacketHandlers.AddHandler(MSG_RAID_READY_CHECK, "ready check");
     botOutgoingPacketHandlers.AddHandler(SMSG_QUEST_CONFIRM_ACCEPT, "confirm quest");
-    botOutgoingPacketHandlers.AddHandler(SMSG_QUESTGIVER_QUEST_DETAILS, "quest details");
-
-    botOutgoingPacketHandlers.AddHandler(SMSG_CHAT_RESTRICTED, "message chat", true);
-    
+    botOutgoingPacketHandlers.AddHandler(SMSG_QUESTGIVER_QUEST_DETAILS, "quest details");   
 
 #ifndef MANGOSBOT_ZERO
     botOutgoingPacketHandlers.AddHandler(SMSG_ARENA_TEAM_INVITE, "arena team invite");
@@ -1194,9 +1191,9 @@ void PlayerbotAI::Reset(bool full)
         aiObjectContext->GetValue<LastMovement& >("last area trigger")->Get().Set(NULL);
         aiObjectContext->GetValue<LastMovement& >("last taxi")->Get().Set(NULL);
 
-        aiObjectContext->GetValue<TravelTarget* >("travel target")->Get()->setTarget(sTravelMgr.nullTravelDestination, sTravelMgr.nullWorldPosition, true);
-        aiObjectContext->GetValue<TravelTarget* >("travel target")->Get()->setStatus(TravelStatus::TRAVEL_STATUS_EXPIRED);
-        aiObjectContext->GetValue<TravelTarget* >("travel target")->Get()->setExpireIn(1000);
+        sTravelMgr.SetNullTravelTarget(aiObjectContext->GetValue<TravelTarget* >("travel target")->Get());
+        aiObjectContext->GetValue<TravelTarget* >("travel target")->Get()->SetStatus(TravelStatus::TRAVEL_STATUS_EXPIRED);
+        aiObjectContext->GetValue<TravelTarget* >("travel target")->Get()->SetExpireIn(1000);
 
         InterruptSpell();
 
@@ -1588,9 +1585,9 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
             }
 #endif
 
-            bool isAiChat = HasStrategy("ai chat", BotState::BOT_STATE_NON_COMBAT);
+            bool isAiChat = sPlayerbotAIConfig.llmEnabled > 0 && (HasStrategy("ai chat", BotState::BOT_STATE_NON_COMBAT) || sPlayerbotAIConfig.llmEnabled == 3);
 
-            if (isAiChat && lang == LANG_ADDON)
+            if (isAiChat && (lang == LANG_ADDON || message.find("d:") == 0))
                 return;
 
             if (guid1 != bot->GetObjectGuid()) // do not reply to self
@@ -1631,7 +1628,7 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
                     if (bot->InBattleGround() && !(isMentioned || (msgtype != CHAT_MSG_CHANNEL && !isFromFreeBot)))
                         return;
 
-                    if (HasRealPlayerMaster() && guid1 != GetMaster()->GetObjectGuid())
+                    if (!isAiChat && HasRealPlayerMaster() && guid1 != GetMaster()->GetObjectGuid())
                         return;
 
                     if (lang == LANG_ADDON)
@@ -1653,7 +1650,7 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
                             return;
                         }
                     }
-                    else
+                    else if (!isAiChat)
                     {
                         if (isFromFreeBot && urand(0, 20))
                             return;
@@ -1681,9 +1678,6 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
             }
             else if (isAiChat)
             {
-                if (message.find("d:") != std::string::npos)
-                    return;
-
                 ChatChannelSource chatChannelSource = bot->GetPlayerbotAI()->GetChatChannelSource(bot, msgtype, chanName);
 
                 std::string llmChannel;
@@ -2860,7 +2854,7 @@ bool PlayerbotAI::SayToGuild(std::string msg)
             {
                 if (player.second->GetGuildId() == bot->GetGuildId())
                 {
-                    if (HasStrategy("ai chat", BotState::BOT_STATE_NON_COMBAT) && sPlayerbotAIConfig.llmBotToBotChatChance)
+                    if (sPlayerbotAIConfig.llmEnabled > 0 && (HasStrategy("ai chat", BotState::BOT_STATE_NON_COMBAT) || sPlayerbotAIConfig.llmEnabled == 3) && sPlayerbotAIConfig.llmBotToBotChatChance)
                     {
                         WorldPacket packet_template(CMSG_MESSAGECHAT);
 
@@ -3135,7 +3129,7 @@ bool PlayerbotAI::SayToParty(std::string msg)
         return false;
     }
 
-    if (HasStrategy("ai chat", BotState::BOT_STATE_NON_COMBAT) && sPlayerbotAIConfig.llmBotToBotChatChance)
+    if (sPlayerbotAIConfig.llmEnabled > 0 && (HasStrategy("ai chat", BotState::BOT_STATE_NON_COMBAT) || sPlayerbotAIConfig.llmEnabled == 3) && sPlayerbotAIConfig.llmBotToBotChatChance)
     {
         for (auto reciever : GetPlayersInGroup())
         {
@@ -3170,7 +3164,7 @@ bool PlayerbotAI::SayToParty(std::string msg)
 
 bool PlayerbotAI::SayToRaid(std::string msg)
 {
-    if (!bot->GetGroup() || bot->GetGroup()->IsRaidGroup())
+    if (!bot->GetGroup() || !bot->GetGroup()->IsRaidGroup())
     {
         return false;
     }
@@ -3212,7 +3206,7 @@ bool PlayerbotAI::Say(std::string msg)
         lang = LANG_ORCISH;
     }
 
-    if (HasStrategy("ai chat", BotState::BOT_STATE_NON_COMBAT) && sPlayerbotAIConfig.llmBotToBotChatChance)
+    if (sPlayerbotAIConfig.llmEnabled > 0 && (HasStrategy("ai chat", BotState::BOT_STATE_NON_COMBAT) || sPlayerbotAIConfig.llmEnabled == 3) && sPlayerbotAIConfig.llmBotToBotChatChance)
     {
         if (this->HasPlayerNearby(35.0f))
         {
@@ -3812,19 +3806,33 @@ bool PlayerbotAI::HasSpell(uint32 spellid) const
     return false;
 }
 
-bool PlayerbotAI::CanCastSpell(std::string name, Unit* target, uint8 effectMask, Item* itemTarget, bool ignoreRange, bool ignoreInCombat, bool ignoreMount)
+bool PlayerbotAI::CanCastSpell(std::string name, Unit* target, uint8 effectMask, Item* itemTarget, bool ignoreRange, bool ignoreInCombat, bool ignoreMount, SpellCastResult* checkResult)
 {
-    return CanCastSpell(aiObjectContext->GetValue<uint32>("spell id", name)->Get(), target, 0, true, itemTarget, ignoreRange, ignoreInCombat, ignoreMount);
+    return CanCastSpell(aiObjectContext->GetValue<uint32>("spell id", name)->Get(), target, 0, true, itemTarget, ignoreRange, ignoreInCombat, ignoreMount, checkResult);
 }
 
-bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, bool checkHasSpell, Item* itemTarget, bool ignoreRange, bool ignoreInCombat, bool ignoreMount)
+bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, bool checkHasSpell, Item* itemTarget, bool ignoreRange, bool ignoreInCombat, bool ignoreMount, SpellCastResult* checkResult)
 {
     if (!spellid)
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_KNOWN;
+        }
+
         return false;
+    }
 
     Pet* pet = bot->GetPet();
     if (pet && pet->HasSpell(spellid) && pet->IsSpellReady(spellid))
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_CAST_OK;
+        }
+
         return true;
+    }
 
     if (bot->hasUnitState(UNIT_STAT_CAN_NOT_REACT_OR_LOST_CONTROL))
     {
@@ -3832,6 +3840,11 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, b
         const std::list<uint32> ignoreOutOfControllSpells = { 642, 1020, 1499, 1953, 7744, 11958, 13795, 13809, 13813, 14302, 14303, 14304, 14305, 14310, 14311, 14316, 14317, 27023, 27025, 34600, 49055, 49056, 49066, 49067 };
         if (std::find(ignoreOutOfControllSpells.begin(), ignoreOutOfControllSpells.end(), spellid) == ignoreOutOfControllSpells.end())
         {
+            if (checkResult)
+            {
+                *checkResult = SPELL_FAILED_NOT_IN_CONTROL;
+            }
+
             return false;
         }
     }
@@ -3840,14 +3853,35 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, b
         target = bot;
 
     if (checkHasSpell && !HasSpell(spellid))
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_KNOWN;
+        }
+
         return false;
+    }
 
     if (!bot->IsSpellReady(spellid))
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_READY;
+        }
+
         return false;
+    }
 
 	SpellEntry const *spellInfo = sServerFacade.LookupSpellInfo(spellid);
 	if (!spellInfo)
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_KNOWN;
+        }
+
         return false;
+    }
 
     // already active next melee swing spell
     if (IsNextMeleeSwingSpell(spellInfo))
@@ -3856,7 +3890,14 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, b
         if (autorepeatSpell)
         {
             if (autorepeatSpell->m_spellInfo->Id == spellInfo->Id)
+            {
+                if (checkResult)
+                {
+                    *checkResult = SPELL_FAILED_SPELL_IN_PROGRESS;
+                }
+
                 return false;
+            }
         }
     }
 
@@ -3869,10 +3910,24 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, b
         {
             const bool positiveSpell = IsPositiveSpell(spellInfo);
             if (positiveSpell && sServerFacade.IsHostileTo(bot, target))
+            {
+                if (checkResult)
+                {
+                    *checkResult = SPELL_FAILED_TARGET_ENEMY;
+                }
+
                 return false;
+            }
 
             if (!positiveSpell && sServerFacade.IsFriendlyTo(bot, target))
+            {
+                if (checkResult)
+                {
+                    *checkResult = SPELL_FAILED_TARGET_FRIENDLY;
+                }
+                
                 return false;
+            }
         }
 
         bool damage = false;
@@ -3901,12 +3956,26 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, b
             {
                 bool immune = target->IsImmuneToSpellEffect(spellInfo, (SpellEffectIndex)i, false);
                 if (immune)
+                {
+                    if (checkResult)
+                    {
+                        *checkResult = SPELL_FAILED_IMMUNE;
+                    }
+
                     return false;
+                }
             }
         }
 
         if (!ignoreRange && bot != target && sServerFacade.GetDistance2d(bot, target) > sPlayerbotAIConfig.sightDistance)
+        {
+            if (checkResult)
+            {
+                *checkResult = SPELL_FAILED_OUT_OF_RANGE;
+            }
+
             return false;
+        }
 	}
 
 	ObjectGuid oldSel = bot->GetSelectionGuid();
@@ -3921,6 +3990,11 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, b
     delete spell;
 	//if (oldSel)
 	//	bot->SetSelectionGuid(oldSel);
+
+    if (checkResult)
+    {
+        *checkResult = result;
+    }
 
     switch (result)
     {
@@ -3943,14 +4017,28 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, b
     }
 }
 
-bool PlayerbotAI::CanCastSpell(uint32 spellid, GameObject* goTarget, uint8 effectMask, bool checkHasSpell, bool ignoreRange, bool ignoreInCombat, bool ignoreMount)
+bool PlayerbotAI::CanCastSpell(uint32 spellid, GameObject* goTarget, uint8 effectMask, bool checkHasSpell, bool ignoreRange, bool ignoreInCombat, bool ignoreMount, SpellCastResult* checkResult)
 {
     if (!spellid)
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_KNOWN;
+        }
+
         return false;
+    }
 
     Pet* pet = bot->GetPet();
     if (pet && pet->HasSpell(spellid) && pet->IsSpellReady(spellid))
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_CAST_OK;
+        }
+
         return true;
+    }
 
     if (bot->hasUnitState(UNIT_STAT_CAN_NOT_REACT_OR_LOST_CONTROL))
     {
@@ -3958,19 +4046,45 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, GameObject* goTarget, uint8 effec
         const std::list<uint32> ignoreOutOfControllSpells = { 642, 1020, 1499, 1953, 7744, 11958, 13795, 13809, 13813, 14302, 14303, 14304, 14305, 14310, 14311, 14316, 14317, 27023, 27025, 34600, 49055, 49056, 49066, 49067 };
         if (std::find(ignoreOutOfControllSpells.begin(), ignoreOutOfControllSpells.end(), spellid) == ignoreOutOfControllSpells.end())
         {
+            if (checkResult)
+            {
+                *checkResult = SPELL_FAILED_NOT_IN_CONTROL;
+            }
+
             return false;
         }
     }
 
-    if (checkHasSpell && !bot->HasSpell(spellid))
+    if (checkHasSpell && !HasSpell(spellid))
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_KNOWN;
+        }
+
         return false;
+    }
 
     if (!bot->IsSpellReady(spellid))
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_READY;
+        }
+
         return false;
+    }
 
     SpellEntry const* spellInfo = sServerFacade.LookupSpellInfo(spellid);
     if (!spellInfo)
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_KNOWN;
+        }
+
         return false;
+    }
 
     bool damage = false;
     for (int32 i = EFFECT_INDEX_0; i <= EFFECT_INDEX_2; i++)
@@ -3981,8 +4095,16 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, GameObject* goTarget, uint8 effec
             break;
         }
     }
+
     if (sServerFacade.GetDistance2d(bot, goTarget) > sPlayerbotAIConfig.sightDistance)
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_OUT_OF_RANGE;
+        }
+
         return false;
+    }
 
     //ObjectGuid oldSel = bot->GetSelectionGuid();
     bot->SetSelectionGuid(goTarget->GetObjectGuid());
@@ -3997,34 +4119,53 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, GameObject* goTarget, uint8 effec
     //if (oldSel)
     //    bot->SetSelectionGuid(oldSel);
 
+    if (checkResult)
+    {
+        *checkResult = result;
+    }
+
     switch (result)
     {
-    case SPELL_FAILED_NOT_INFRONT:
-    case SPELL_FAILED_NOT_STANDING:
-    case SPELL_FAILED_UNIT_NOT_INFRONT:
-    case SPELL_FAILED_MOVING:
-    case SPELL_FAILED_TRY_AGAIN:
-    case SPELL_CAST_OK:
-        return true;
-    case SPELL_FAILED_OUT_OF_RANGE:
-        return ignoreRange;
-    case SPELL_FAILED_AFFECTING_COMBAT:
-        return ignoreInCombat;
-    case SPELL_FAILED_NOT_MOUNTED:
-        return ignoreMount;
-    default:
-        return false;
+        case SPELL_FAILED_NOT_INFRONT:
+        case SPELL_FAILED_NOT_STANDING:
+        case SPELL_FAILED_UNIT_NOT_INFRONT:
+        case SPELL_FAILED_MOVING:
+        case SPELL_FAILED_TRY_AGAIN:
+        case SPELL_CAST_OK:
+            return true;
+        case SPELL_FAILED_OUT_OF_RANGE:
+            return ignoreRange;
+        case SPELL_FAILED_AFFECTING_COMBAT:
+            return ignoreInCombat;
+        case SPELL_FAILED_NOT_MOUNTED:
+            return ignoreMount;
+        default:
+            return false;
     }
 }
 
-bool PlayerbotAI::CanCastSpell(uint32 spellid, float x, float y, float z, uint8 effectMask, bool checkHasSpell, Item* itemTarget, bool ignoreRange, bool ignoreInCombat, bool ignoreMount)
+bool PlayerbotAI::CanCastSpell(uint32 spellid, float x, float y, float z, uint8 effectMask, bool checkHasSpell, Item* itemTarget, bool ignoreRange, bool ignoreInCombat, bool ignoreMount, SpellCastResult* checkResult)
 {
     if (!spellid)
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_KNOWN;
+        }
+
         return false;
+    }
 
     Pet* pet = bot->GetPet();
     if (pet && pet->HasSpell(spellid) && pet->IsSpellReady(spellid))
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_CAST_OK;
+        }
+
         return true;
+    }
 
     if (bot->hasUnitState(UNIT_STAT_CAN_NOT_REACT_OR_LOST_CONTROL))
     {
@@ -4032,21 +4173,47 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, float x, float y, float z, uint8 
         const std::list<uint32> ignoreOutOfControllSpells = { 642, 1020, 1499, 1953, 7744, 11958, 13795, 13809, 13813, 14302, 14303, 14304, 14305, 14310, 14311, 14316, 14317, 27023, 27025, 34600, 49055, 49056, 49066, 49067 };
         if (std::find(ignoreOutOfControllSpells.begin(), ignoreOutOfControllSpells.end(), spellid) == ignoreOutOfControllSpells.end())
         {
+            if (checkResult)
+            {
+                *checkResult = SPELL_FAILED_NOT_IN_CONTROL;
+            }
+
             return false;
         }
     }
 
-    if (checkHasSpell && !bot->HasSpell(spellid))
+    if (checkHasSpell && !HasSpell(spellid))
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_KNOWN;
+        }
+
         return false;
+    }
 
     SpellEntry const* spellInfo = sServerFacade.LookupSpellInfo(spellid);
     if (!spellInfo)
+    {
+        if (checkResult)
+        {
+            *checkResult = SPELL_FAILED_NOT_KNOWN;
+        }
+
         return false;
+    }
 
     if (!itemTarget)
     {
         if (sqrt(bot->GetDistance(x,y,z)) > sPlayerbotAIConfig.sightDistance)
+        {
+            if (checkResult)
+            {
+                *checkResult = SPELL_FAILED_OUT_OF_RANGE;
+            }
+
             return false;
+        }
     }
 
     Spell* spell = new Spell(bot, spellInfo, false);
@@ -4058,23 +4225,28 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, float x, float y, float z, uint8 
     SpellCastResult result = spell->CheckCast(true);
     delete spell;
 
+    if (checkResult)
+    {
+        *checkResult = result;
+    }
+
     switch (result)
     {
-    case SPELL_FAILED_NOT_INFRONT:
-    case SPELL_FAILED_NOT_STANDING:
-    case SPELL_FAILED_UNIT_NOT_INFRONT:
-    case SPELL_FAILED_MOVING:
-    case SPELL_FAILED_TRY_AGAIN:
-    case SPELL_CAST_OK:
-        return true;
-    case SPELL_FAILED_OUT_OF_RANGE:
-        return ignoreRange;
-    case SPELL_FAILED_AFFECTING_COMBAT:
-        return ignoreInCombat;
-    case SPELL_FAILED_NOT_MOUNTED:
-        return ignoreMount;
-    default:
-        return false;
+        case SPELL_FAILED_NOT_INFRONT:
+        case SPELL_FAILED_NOT_STANDING:
+        case SPELL_FAILED_UNIT_NOT_INFRONT:
+        case SPELL_FAILED_MOVING:
+        case SPELL_FAILED_TRY_AGAIN:
+        case SPELL_CAST_OK:
+            return true;
+        case SPELL_FAILED_OUT_OF_RANGE:
+            return ignoreRange;
+        case SPELL_FAILED_AFFECTING_COMBAT:
+            return ignoreInCombat;
+        case SPELL_FAILED_NOT_MOUNTED:
+            return ignoreMount;
+        default:
+            return false;
     }
 }
 
@@ -5296,6 +5468,12 @@ uint32 PlayerbotAI::GetFixedBotNumer(BotTypeNumber typeNumber, uint32 maxNum, fl
 
 GrouperType PlayerbotAI::GetGrouperType()
 {
+    AiObjectContext* context = GetAiObjectContext();
+    int32 grouperOverride = AI_VALUE2(int32, "manual saved int", "grouper override");
+
+    if (grouperOverride >= 0)
+        return GrouperType(grouperOverride);
+
     uint32 maxGroupType = sPlayerbotAIConfig.randomBotRaidNearby ? 100 : 95;
     uint32 grouperNumber = GetFixedBotNumer(BotTypeNumber::GROUPER_TYPE_NUMBER, maxGroupType, 0);
 
@@ -5328,6 +5506,12 @@ GrouperType PlayerbotAI::GetGrouperType()
 
 GuilderType PlayerbotAI::GetGuilderType()
 {
+    AiObjectContext* context = GetAiObjectContext();
+    int32 guilderOverride = AI_VALUE2(int32, "manual saved int", "guilder override");
+
+    if (guilderOverride >= 0)
+        return GuilderType(guilderOverride);
+
     uint32 grouperNumber = GetFixedBotNumer(BotTypeNumber::GUILDER_TYPE_NUMBER, 100, 0);
 
     if (grouperNumber < 20 && !HasRealPlayerMaster())
@@ -5342,6 +5526,25 @@ GuilderType PlayerbotAI::GetGuilderType()
         return GuilderType::LARGE;
 
     return GuilderType::MASSIVE;
+}
+
+uint32 PlayerbotAI::GetMaxPreferedGuildSize()
+{
+    uint32 maxSize = (uint8)GetGuilderType();
+
+    if (!bot->GetGuildId()) return maxSize;
+
+    Guild* guild =sGuildMgr.GetGuildById(bot->GetGuildId());
+
+    uint32 maxRank = guild->GetRanksSize();
+
+    MemberSlot* botMember = guild->GetMemberSlot(bot->GetObjectGuid());
+
+    if (!botMember->RankId) return maxSize;
+
+    uint32 memberMod = (botMember->RankId * 20) / maxRank;
+
+    return (maxSize * (100 - memberMod)) / 100;
 }
 
 bool PlayerbotAI::HasPlayerNearby(WorldPosition pos, float range)
@@ -5397,6 +5600,24 @@ bool PlayerbotAI::HasManyPlayersNearby(uint32 trigerrValue, float range)
                 return true;
         }
     }
+    return false;
+}
+
+bool PlayerbotAI::ChannelHasRealPlayer(std::string channelName)
+{
+    if (ChannelMgr* cMgr = channelMgr(bot->GetTeam()))
+    {
+
+        if (Channel* chn = cMgr->GetChannel(channelName, bot))
+        {
+            ChannelAcces* chna = reinterpret_cast<ChannelAcces*>(chn);
+
+            for (auto& player : sRandomPlayerbotMgr.GetPlayers())
+                if (chna->IsOn(player.second->GetObjectGuid()))
+                    return true;
+        }
+    }
+
     return false;
 }
 
@@ -5524,9 +5745,10 @@ std::pair<uint32, uint32> PlayerbotAI::GetPriorityBracket(ActivePiorityType type
     case ActivePiorityType::HAS_REAL_PLAYER_MASTER:
     case ActivePiorityType::IS_REAL_PLAYER:
     case ActivePiorityType::IN_GROUP_WITH_REAL_PLAYER:
-    case ActivePiorityType::IN_INSTANCE:
     case ActivePiorityType::VISIBLE_FOR_PLAYER:
         return { 0,0 };
+    case ActivePiorityType::IN_INSTANCE:
+        return { 0,5 };
     case ActivePiorityType::IS_ALWAYS_ACTIVE:
     case ActivePiorityType::IN_COMBAT:
         return { 0,10 };
@@ -5591,11 +5813,11 @@ bool PlayerbotAI::AllowActive(ActivityType activityType)
         case ActivePiorityType::IS_REAL_PLAYER:
         case ActivePiorityType::IN_GROUP_WITH_REAL_PLAYER:
         case ActivePiorityType::IN_INSTANCE:
-        case ActivePiorityType::VISIBLE_FOR_PLAYER:
         case ActivePiorityType::IS_ALWAYS_ACTIVE:
-        case ActivePiorityType::IN_COMBAT:
             return true;
             break;
+        case ActivePiorityType::VISIBLE_FOR_PLAYER:
+        case ActivePiorityType::IN_COMBAT:
         case ActivePiorityType::NEARBY_PLAYER:
         case ActivePiorityType::IN_BG_QUEUE:
         case ActivePiorityType::IN_LFG:
@@ -5606,7 +5828,6 @@ bool PlayerbotAI::AllowActive(ActivityType activityType)
         case ActivePiorityType::IN_ACTIVE_MAP:
         case ActivePiorityType::IN_INACTIVE_MAP:
         default:
-            return false;
             break;
         }
     }
@@ -5958,35 +6179,35 @@ std::string PlayerbotAI::HandleRemoteCommand(std::string command)
         std::ostringstream out;
 
         TravelTarget* target = GetAiObjectContext()->GetValue<TravelTarget*>("travel target")->Get();
-        if (target->getDestination()) {
-            out << "Destination = " << target->getDestination()->getName();
+        if (target->GetDestination()) {
+            out << "Destination ";
 
-            out << ": " << target->getDestination()->getTitle();
+            out << ": " << target->GetDestination()->GetTitle();
 
-            if (!(*target->getPosition() == WorldPosition()))
+            if (target->GetPosition())
             {
-                out << "(" << target->getPosition()->getAreaName() << ")";
-                out << " distance: " << target->getPosition()->distance(bot) << "y";
+                out << "(" << target->GetPosition()->getAreaName() << ")";
+                out << " distance: " << target->GetPosition()->distance(bot) << "y";
             }
         }
         out << " Status =";
-        if (target->getStatus() == TravelStatus::TRAVEL_STATUS_NONE)
+        if (target->GetStatus() == TravelStatus::TRAVEL_STATUS_NONE)
             out << " none";
-        else if (target->getStatus() == TravelStatus::TRAVEL_STATUS_PREPARE)
+        else if (target->GetStatus() == TravelStatus::TRAVEL_STATUS_PREPARE)
             out << " prepare";
-        else if (target->getStatus() == TravelStatus::TRAVEL_STATUS_TRAVEL)
+        else if (target->GetStatus() == TravelStatus::TRAVEL_STATUS_TRAVEL)
             out << " travel";
-        else if (target->getStatus() == TravelStatus::TRAVEL_STATUS_WORK)
+        else if (target->GetStatus() == TravelStatus::TRAVEL_STATUS_WORK)
             out << " work";
-        else if (target->getStatus() == TravelStatus::TRAVEL_STATUS_COOLDOWN)
+        else if (target->GetStatus() == TravelStatus::TRAVEL_STATUS_COOLDOWN)
             out << " cooldown";
-        else if (target->getStatus() == TravelStatus::TRAVEL_STATUS_EXPIRED)
+        else if (target->GetStatus() == TravelStatus::TRAVEL_STATUS_EXPIRED)
             out << " expired";
 
-        if(target->getStatus() != TravelStatus::TRAVEL_STATUS_EXPIRED)
-            out << " Expire in " << (target->getTimeLeft()/1000) << "s";
+        if(target->GetStatus() != TravelStatus::TRAVEL_STATUS_EXPIRED)
+            out << " Expire in " << (target->GetTimeLeft()/1000) << "s";
 
-        out << " Retry " << target->getRetryCount(true) << "/" << target->getRetryCount(false);
+        out << " Retry " << target->GetRetryCount(true) << "/" << target->GetRetryCount(false);
 
         return out.str();
     }
